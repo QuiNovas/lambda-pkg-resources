@@ -31,7 +31,7 @@ setup(
         "Programming Language :: Python :: 3.8",
     ],
     keywords="pkg_resources extension",
-    install_requires=["setuptools", "pip==20.3.3", "wheel"],
+    install_requires=["setuptools", "pip", "wheel"],
     package_dir={"": "src"},
     packages=find_packages("src"),
 )
