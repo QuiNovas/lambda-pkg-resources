@@ -1,6 +1,8 @@
 from collections import defaultdict
 from glob import glob
-from os import environ, path
+from re import IGNORECASE, match, compile as re_compile
+from fnmatch import translate
+from os import environ, path, listdir
 from subprocess import check_call
 from sys import executable
 from tempfile import TemporaryDirectory
@@ -207,12 +209,9 @@ class DistInstaller:
             with ZipFile(glob(path.join(tmpdir, "*.whl"))[0], "r") as zf:
                 zf.extractall(self.dist_dir)
 
-            dist_path = glob(
-                path.join(
-                    self.dist_dir,
-                    f'{requirement.project_name.replace("-","_")}-*.dist-info',
-                )
-            )[0]
+            pattern = re_compile(translate(f'{requirement.project_name.replace("-","_")}-*.dist-info'), IGNORECASE)
+            dist_path = [path.join(self.dist_dir, x) for x in listdir(self.dist_dir) if path.isdir(path.join(self.dist_dir, x)) and match(pattern, x)][0]
+
             root = path.dirname(dist_path)
             return Distribution.from_location(
                 root,
