@@ -1,11 +1,15 @@
 from collections import defaultdict
-from glob import glob
-from re import IGNORECASE, match, compile as re_compile
+from concurrent.futures.thread import ThreadPoolExecutor
 from fnmatch import translate
-from os import environ, path, listdir
+from glob import glob
+from os import environ, listdir, path
+from re import IGNORECASE
+from re import compile as re_compile
+from re import match
 from subprocess import check_call
 from sys import executable
 from tempfile import TemporaryDirectory
+from threading import Lock
 from typing import AbstractSet, Callable, List, Optional, Sequence
 from zipfile import ZipFile
 
@@ -79,8 +83,6 @@ class ExcludesWorkingSet(WorkingSet):
         requirements are truly required.
         """
 
-        # set up the stack
-        requirements = list(requirements)[::-1]
         # set of processed requirements
         processed = {}
         # key -> dist
@@ -93,32 +95,34 @@ class ExcludesWorkingSet(WorkingSet):
         # useful for reporting info about conflicts.
         required_by = defaultdict(set)
 
-        while requirements:
-            # process dependencies breadth-first
-            requirement = requirements.pop(0)
-            if requirement in processed:
-                # Ignore cyclic or redundant dependencies
-                continue
+        # Use a collection to hold the env
+        env: List[Environment] = [env]
 
-            if not requirement_extras.markers_pass(requirement, extras):
-                continue
+        # The following function is use din mutliple threads
+        # provide a lock
+        lock = Lock()
 
+        # set up the stack
+        req_stack = list(requirements)[::-1]
+
+        def resolve_requirement(requirement: Requirement):
             dist = best.get(requirement.key)
             if dist is None:
                 # Find the best distribution and add it to the map
                 dist = self.by_key.get(requirement.key)
                 if dist is None or (dist not in requirement and replace_conflicting):
                     ws = self
-                    if env is None:
-                        if dist is None:
-                            env = Environment(self.entries)
-                        else:
-                            # Use an empty environment and workingset to avoid
-                            # any further conflicts with the conflicting
-                            # distribution
-                            env = Environment([])
-                            ws = WorkingSet([])
-                    dist = best[requirement.key] = env.best_match(
+                    with lock:
+                        if env[0] is None:
+                            if dist is None:
+                                env[0] = Environment(self.entries)
+                            else:
+                                # Use an empty environment and workingset to avoid
+                                # any further conflicts with the conflicting
+                                # distribution
+                                env[0] = Environment([])
+                                ws = WorkingSet([])
+                    dist = best[requirement.key] = env[0].best_match(
                         requirement,
                         ws,
                         installer,
@@ -136,20 +140,37 @@ class ExcludesWorkingSet(WorkingSet):
                     dependent_requirement
                 )
 
-            # push the new requirements onto the stack
-            new_requirements = [
-                requirement
-                for requirement in dist.requires(requirement.extras)[::-1]
-                if requirement.key not in self.excludes
-            ]
-            requirements.extend(new_requirements)
+            with lock:
+                # push the new requirements onto the stack
+                new_requirements = [
+                    requirement
+                    for requirement in dist.requires(requirement.extras)[::-1]
+                    if requirement.key not in self.excludes
+                ]
+                req_stack.extend(new_requirements)
 
-            # Register the new requirements needed by requirement
-            for new_requirement in new_requirements:
-                required_by[new_requirement].add(requirement.project_name)
-                requirement_extras[new_requirement] = requirement.extras
+                # Register the new requirements needed by requirement
+                for new_requirement in new_requirements:
+                    required_by[new_requirement].add(requirement.project_name)
+                    requirement_extras[new_requirement] = requirement.extras
 
-            processed[requirement] = True
+                processed[requirement] = True
+
+        with ThreadPoolExecutor() as executor:
+            while (
+                req_stack := [
+                    r
+                    for (i, r) in enumerate(req_stack)
+                    if r not in req_stack[0:i]
+                    and r not in processed
+                    and requirement_extras.markers_pass(r, extras)
+                ]
+            ) :
+                # process dependencies breadth-first
+                reqs = req_stack[:]
+                del req_stack[:]
+                for _ in executor.map(resolve_requirement, reqs):
+                    pass
 
         # return list of distros to activate
         return resolved
@@ -209,8 +230,15 @@ class DistInstaller:
             with ZipFile(glob(path.join(tmpdir, "*.whl"))[0], "r") as zf:
                 zf.extractall(self.dist_dir)
 
-            pattern = re_compile(translate(f'{requirement.project_name.replace("-","_")}-*.dist-info'), IGNORECASE)
-            dist_path = [path.join(self.dist_dir, x) for x in listdir(self.dist_dir) if path.isdir(path.join(self.dist_dir, x)) and match(pattern, x)][0]
+            pattern = re_compile(
+                translate(f'{requirement.project_name.replace("-","_")}-*.dist-info'),
+                IGNORECASE,
+            )
+            dist_path = [
+                path.join(self.dist_dir, x)
+                for x in listdir(self.dist_dir)
+                if path.isdir(path.join(self.dist_dir, x)) and match(pattern, x)
+            ][0]
 
             root = path.dirname(dist_path)
             return Distribution.from_location(
