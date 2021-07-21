@@ -156,21 +156,27 @@ class ExcludesWorkingSet(WorkingSet):
 
                 processed[requirement] = True
 
+        req_stack = [
+            r
+            for (i, r) in enumerate(req_stack)
+            if r not in req_stack[0:i]
+            and r not in processed
+            and requirement_extras.markers_pass(r, extras)
+        ]
         with ThreadPoolExecutor() as executor:
-            while (
-                req_stack := [
+            while req_stack:
+                # process dependencies breadth-first
+                reqs = req_stack[:]
+                del req_stack[:]
+                for _ in executor.map(resolve_requirement, reqs):
+                    pass
+                req_stack = [
                     r
                     for (i, r) in enumerate(req_stack)
                     if r not in req_stack[0:i]
                     and r not in processed
                     and requirement_extras.markers_pass(r, extras)
                 ]
-            ) :
-                # process dependencies breadth-first
-                reqs = req_stack[:]
-                del req_stack[:]
-                for _ in executor.map(resolve_requirement, reqs):
-                    pass
 
         # return list of distros to activate
         return resolved
