@@ -15,7 +15,7 @@ def get_long_description():
 
 setup(
     name="lambda-pkg-resources",
-    version="0.0.5",
+    version="0.0.6",
     description="Supports a dist-info installation of packages with package exclusions",
     long_description=get_long_description(),
     long_description_content_type="text/markdown",

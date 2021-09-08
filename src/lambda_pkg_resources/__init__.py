@@ -183,8 +183,9 @@ class ExcludesWorkingSet(WorkingSet):
 
 
 class DistInstaller:
-    def __init__(self, dist_dir: str) -> None:
+    def __init__(self, dist_dir: str, no_cache_dir: bool = False) -> None:
         self.dist_dir = path.realpath(dist_dir)
+        self.no_cache_dir = no_cache_dir
 
     def fetch_dist(self, requirement):
         """Fetch an egg needed for building.
@@ -220,6 +221,8 @@ class DistInstaller:
             ]
             if quiet:
                 cmd.append("--quiet")
+            if "PIP_NO_CACHE_DIR" not in environ and self.no_cache_dir:
+                cmd.append("--no-cache-dir")
             if index_url is not None:
                 cmd.extend(("--index-url", index_url))
             if find_links is not None:
